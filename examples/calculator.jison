@@ -11,6 +11,8 @@
 [0-9]+                  return 'NUMBER';    // Números inteiros
 [0-9]+\.[0-9]+          return 'NUMBER';    // Números decimais
 [a-zA-Z_][a-zA-Z0-9_]*  return 'ID';        // Identificadores (nomes de variáveis)
+"//"[^\n]*              return 'COM';
+"/*"[^\n]*'*/'          return 'COM';
 "if"                    return 'IF';        // Palavra-chave if
 "else"                  return 'ELSE';      // Palavra-chave else
 "while"                 return 'WHILE';     // Palavra-chave while
@@ -31,6 +33,10 @@
 "!="                    return 'NEQ';       // Operador de desigualdade
 "<"                     return 'LT';        // Menor que
 ">"                     return 'GT';        // Maior que
+"\+="                   return 'PLUSEQ';     // +=
+"-="                    return 'MINUSEQ';    // -=
+"\*="                   return 'MULEQ';      // *=
+"/="                    return 'DIVEQ';      // /=
 "&&"                    return 'AND';       // Operador lógico AND
 "||"                    return 'OR';        // Operador lógico OR
 "!"                     return 'NOT';       // Operador lógico NOT
@@ -38,6 +44,7 @@
 "--"                    return 'DECREMENT'; // Operador de decremento
 "["                     return '[';
 "]"                     return ']';
+","                     return ',';
 <<EOF>>                 return 'EOF';       // Fim de arquivo
 .                       return 'INVALID';   // Qualquer outro caractere não válido
 
@@ -62,19 +69,125 @@
 %%
 
 program
-    : declaration_list EOF
+    : block_statement EOF
     ;
 
-declaration_list
-    : declaration_list declaration
-    | declaration
+block_statement
+    : '{' statement_list '}'
+        { console.log("Bloco de código encontrado"); }
+    ;
+
+statement_list
+    : statement_list statement
+    | statement
+    ;
+
+statement
+    : expression_statement
+    | declaration_statement
+    | if_statement
+    | while_statement
+    | for_statement
+    | do_while_statement
+    | block_statement
+    | return_statement
+    ;
+
+declaration_statement
+    : type var_decl_list ';'
+      { console.log("Declaração(s) encontrada(s): " + $2); }
+    ;
+
+var_decl_list
+    : var_decl_list ',' var_decl
+    | var_decl
+    ;
+
+var_decl
+    : ID
+    | ID '=' expression
+    | ID '[' NUMBER ']'           // arr sem init
+    | ID '[' NUMBER ']' '=' array_initializer
+    ;
+
+array_initializer
+    : '{' init_list '}'
+    ;
+
+init_list
+    : expression
+    | init_list ',' expression
+    ;
+
+/* if, while, for, do-while */
+if_statement
+    : 'if' '(' expression ')' statement
+      | 'if' '(' expression ')' statement 'else' statement
+    ;
+
+while_statement
+    : 'while' '(' expression ')' statement
+    ;
+
+do_while_statement
+    : 'do' statement 'while' '(' expression ')' ';'
+    ;
+
+for_statement
+    : 'for' '(' declaration_opt expression_statement expression ')' statement
+    | 'for' '(' expression_statement expression_statement expression ')' statement
+    ;
+
+declaration_opt
+    : declaration_statement
+    | /* vazio */
+
+/* return */
+return_statement
+    : 'return' expression ';'
+    ;
+
+/* expressions */
+expression_statement
+    : expression ';'
+    ;
+
+"\+="                   return 'PLUSEQ';     // +=
+"-="                    return 'MINUSEQ';    // -=
+"\*="                   return 'MULEQ';      // *=
+"/="                    return 'DIVEQ';      // /=
+
+expression
+    : expression '+' expression
+    | expression '-' expression
+    | expression '*' expression
+    | expression '/' expression
+    | expression '%' expression
+    | expression 'EQ' expression
+    | expression 'NEQ' expression
+    | expression 'LT' expression
+    | expression 'GT' expression
+    | expression 'LE' expression
+    | expression 'GE' expression
+    | expression 'PLUSEQ' expression
+    | expression 'MINUSEQ' expression
+    | expression 'MULEQ' expression
+    | expression 'DIVEQ' expression
+    | expression 'AND' expression
+    | expression 'OR' expression
+    | ID '=' expression
+    | ID 'PLUSEQ' expression    /* += */
+    | ID 'MINUSEQ' expression   /* -= */
+    | '(' expression ')'
+    | ID '[' expression ']'     /* array[i] */
+    | ID
+    | NUMBER
+    | '!' expression
     ;
 
 declaration
-    : type ID ';'                                   { console.log("Declaração de variável: " + $1 + " " + $2); }
-    | type ID '=' expression ';'                     { console.log("Declaração com atribuição: " + $1 + " " + $2 + " = " + $4); }
-    | type ID '(' parameter_list ')' '{' statement_list '}'
-        { console.log("Função declarada: " + $2 + " com parâmetros " + $4); }
+    : type ID '(' parameter_list ')' '{' statement_list '}'
+      { console.log("Função declarada: " + $2 + " com parâmetros " + $4); }
     ;
 
 type
@@ -85,67 +198,10 @@ type
 
 parameter_list
     : parameter_list ',' type ID
-        { $$ = $1.concat($3); }
+        { /* ... */ }
     | type ID
-        { $$ = [$2]; }
+        { /* ... */ }
     | /* vazio */
-        { $$ = []; }
     ;
+%%
 
-statement_list
-    : statement_list statement
-    | statement
-    ;
-
-statement
-    : expression_statement
-    | if_statement
-    | while_statement
-    | for_statement
-    | return_statement
-    | block_statement
-    ;
-
-expression_statement
-    : expression ';'                               { console.log("Expressão: " + $1); }
-    ;
-
-if_statement
-    : 'if' '(' expression ')' statement
-        { console.log("IF encontrado"); }
-    | 'if' '(' expression ')' statement 'else' statement
-        { console.log("IF com ELSE encontrado"); }
-    ;
-
-while_statement
-    : 'while' '(' expression ')' statement
-        { console.log("While encontrado"); }
-    ;
-
-for_statement
-    : FOR '(' declaration expression_statement expression ')' statement
-        { console.log("For com declaração de variável encontrado") }
-    ;
-
-return_statement
-    : 'return' expression ';'                       { console.log("Return encontrado: " + $2); }
-    ;
-
-block_statement
-    : '{' statement_list '}'
-        { console.log("Bloco de código encontrado"); }
-    ;
-
-expression
-    : expression '+' expression                        { $$ = $1 + $3; }
-    | expression '-' expression                        { $$ = $1 - $3; }
-    | expression '*' expression                        { $$ = $1 * $3; }
-    | expression '/' expression                        { $$ = $1 / $3; }
-    | '(' expression ')'                               { $$ = $2; }
-    | ID '=' expression                                { $$ = $1 + " = " + $3; }
-    | NUMBER                                           { $$ = parseInt(yytext, 10); }
-    | '!' expression                                   { $$ = !$2; }
-    | ID                                              { $$ = $1; }
-    | expression '&&' expression                       { $$ = $1 && $3; }  // Operador lógico AND
-    | expression '||' expression                       { $$ = $1 || $3; }  // Operador lógico OR
-    ;
