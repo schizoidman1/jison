@@ -15,11 +15,7 @@ default\b                               { return 'DEFAULT'; }
 while\b                                 { return 'WHILE'; }
 for\b                                   { return 'FOR'; }
 do\b                                    { return 'DO'; }
-printf\b                                { return 'PRINTF'; }
-scanf\b                                 { return 'SCANF'; }
-malloc\b                                { return 'MALLOC'; }
 sizeof\b                                { return 'SIZEOF'; }
-free\b                                  { return 'FREE'; }
 typedef\b                               { return 'TYPEDEF'; }
 struct\b                                { return 'STRUCT'; }
 union\b                                 { return 'UNION'; }
@@ -72,7 +68,7 @@ return\b                                { return 'RETURN'; }
 "-"                                    { return 'SUB'; }
 "*"                                    { return 'MULT'; }
 "/"                                    { return 'DIV'; }
-"%"                                    { return 'RDIV'; }  Operadores aritméticos */
+"%"                                    { return 'RDIV'; }  /* Operadores aritméticos */
 "="                                     { return 'ATT'; }    /* Operador de atribuição */
 ":"                                     { return ':'; }    /* Dois-pontos para casos em switch */
 "("                                     { return '('; }
@@ -91,8 +87,26 @@ return\b                                { return 'RETURN'; }
 
 /lex
 
-// Parser (parte que define a gramática)
 %start program
+
+%right ATT
+%left OR
+%left AND
+%left '|'
+%left AMP
+%left EQ NE
+%left '<' '>' LE GE
+%left SUM SUB
+%left MULT DIV RDIV
+%right '!' '~'
+%right CAST
+
+%{
+const { addSymbol, setScope, resetScope } = require('./Syntax/symbolTable');
+const { createNode } = require('./Syntax/ast');
+const { semanticCheck, inferType } = require('./Syntax/semantic');
+const { generateThreeAddress } = require('./Syntax/threeAddress');
+%}
 
 %%
 
@@ -109,8 +123,9 @@ statement_list
 
 statement
     : '#' 'INCLUDE' 'library' 
-    | type declarator '(' ')' block
-    | type declarator '(' param_list_opt ')' block
+    // FUNÇÃO COM BLOCO: novo escopo!
+    | type declarator '(' param_list_opt ')' func_scope block
+    // Função só protótipo (sem bloco): não precisa escopo
     | type declarator '(' param_list_opt ')' ';'
     | declaration
     | 'ENUM' IDF '{' enumerator_list '}' ';'
@@ -136,7 +151,17 @@ statement
     | ';'
     ;
 
-type 
+// Sempre cria escopo novo ao entrar no corpo da função
+func_scope
+    : /* vazio */ { setScope($-3); }
+    ;
+
+type
+    : base_type
+    | type MULT
+    ;
+
+base_type
     : 'STRUCT' IDF
     | 'UNION' IDF
     | 'ENUM' IDF
@@ -154,41 +179,175 @@ type
     | 'VOID'
     ;
 
+
 declaration
     : type multideclaration ';'
+        {
+            for (var i = 0; i < $2.length; i++) {
+                // Variável simples: int x;
+                if (typeof $2[i] === 'string') {
+                    addSymbol($2[i], $1);
+                } 
+                // Inicialização: array ou variável com valor
+                else if (Array.isArray($2[i])) {
+                    // Array declarado: $2[i][0] é nó AST tipo array
+                    if (typeof $2[i][0] === 'object' && $2[i][0].type === 'array') {
+                        addSymbol($2[i][0].value, $1 + '[]');
+                    } else {
+                        addSymbol($2[i][0], $1);
+                    }
+
+                    // AST/3-address code:
+                    if (Array.isArray($2[i][1])) {
+                        // Array inicializado: int arr[5] = { ... };
+                        var arrayId = createNode('array', null, null, $2[i][0].value);
+                        var astNode = createNode('array_init', arrayId, null, $2[i][1]);
+                        semanticCheck(astNode);
+                        generateThreeAddress(astNode);
+                    } else {
+                        // Variável comum inicializada: int x = 1;
+                        var nomeVar = (typeof $2[i][0] === 'object' && $2[i][0].type === 'array')
+                            ? $2[i][0].value
+                            : $2[i][0];
+                        var astNode = createNode('assign', createNode('id', null, null, nomeVar), $2[i][1]);
+                        semanticCheck(astNode);
+                        generateThreeAddress(astNode);
+                    }
+                }
+            }
+        }
+    | type declarator 'ATT' '{' values '}' ';'
+        {
+            // int arr[3] = {1,2,3};
+            var nomeArr = (typeof $2 === 'object' && $2.type === 'array')
+                ? $2.value
+                : $2;
+            addSymbol(nomeArr, $1 + '[]');
+            var arrayId = createNode('array', null, null, nomeArr);
+            var astNode = createNode('array_init', arrayId, null, $5);
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
     | '#' 'DEFINE' 'IDF' expression
     ;
 
+
+
 declarator
-    : 'IDF'
-    | MULT declarator   /* *arr, **p, etc */
-    | declarator '[' expression ']'
+    : 'IDF' { $$ = $1; }
+    | MULT declarator   { $$ = $2; }
+    | declarator '[' expression ']' 
+        { $$ = createNode('array', null, null, $1, { size: $3 }); }
     ;
 
+
+
 multideclaration
-    : declarator
-    | declarator 'ATT' expression
-    | multideclaration ',' declarator
-    | multideclaration ',' assignment 'ATT' expression
+    : declarator                          { $$ = [$1]; }
+    | declarator 'ATT' expression         { $$ = [[$1, $3]]; }
+    | declarator 'ATT' '{' values '}'     { $$ = [[$1, $4]]; }
+    | multideclaration ',' declarator     { $1.push($3); $$ = $1; }
+    | multideclaration ',' declarator 'ATT' expression
+                                          { $1.push([$3, $5]); $$ = $1; }
+    | multideclaration ',' declarator 'ATT' '{' values '}'
+                                          { $1.push([$3, $6]); $$ = $1; }
     ;
 
 assignment
     : 'IDF' 'ATT' expression
+        {
+            var astNode = createNode('assign', createNode('id', null, null, $1), $3);
+            if (typeof parser.onAssignment === 'function') {
+                parser.onAssignment(astNode);
+            }
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
     | 'IDF' '[' expression ']' 'ATT' expression
+        {
+            var arrAccess = createNode('array_access', null, null, { id: $1, index: $3 });
+            var astNode = createNode('assign', arrAccess, $6);
+            if (typeof parser.onAssignment === 'function') {
+                parser.onAssignment(astNode);
+            }
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
+    | 'IDF' '[' expression ']' 'ATT' '{' values '}'
+        {
+            var arrayId = createNode('array', null, null, $1);
+            var astNode = createNode(
+                'array_init',
+                arrayId,
+                $3,
+                $7
+            );
+            if (typeof parser.onAssignment === 'function') {
+                parser.onAssignment(astNode);
+            }
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
     ;
 
+
 operation_idf
-    : 'IDF' 'SUM' 'ATT' expression
-    | 'IDF' 'SUB' 'ATT' expression
-    | 'IDF' 'MULT' 'ATT' expression
-    | 'IDF' 'DIV' 'ATT' expression
-    | 'IDF' 'SUM' 'SUM'
-    | 'IDF' 'SUB' 'SUB'
+    : IDF SUM ATT expression
+        {
+            var lhs = createNode('id', null, null, $1);
+            var rhs = createNode('bin_op', lhs, $4, '+');
+            var astNode = createNode('assign', lhs, rhs);
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
+    | IDF SUB ATT expression
+        {
+            var lhs = createNode('id', null, null, $1);
+            var rhs = createNode('bin_op', lhs, $4, '-');
+            var astNode = createNode('assign', lhs, rhs);
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
+    | IDF MULT ATT expression
+        {
+            var lhs = createNode('id', null, null, $1);
+            var rhs = createNode('bin_op', lhs, $4, '*');
+            var astNode = createNode('assign', lhs, rhs);
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
+    | IDF DIV ATT expression
+        {
+            var lhs = createNode('id', null, null, $1);
+            var rhs = createNode('bin_op', lhs, $4, '/');
+            var astNode = createNode('assign', lhs, rhs);
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
+    | IDF SUM SUM
+        {
+            var lhs = createNode('id', null, null, $1);
+            var rhs = createNode('int_lit', null, null, 1);
+            var expr = createNode('bin_op', lhs, rhs, '+');
+            var astNode = createNode('assign', lhs, expr);
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
+    | IDF SUB SUB
+        {
+            var lhs = createNode('id', null, null, $1);
+            var rhs = createNode('int_lit', null, null, 1);
+            var expr = createNode('bin_op', lhs, rhs, '-');
+            var astNode = createNode('assign', lhs, expr);
+            semanticCheck(astNode);
+            generateThreeAddress(astNode);
+        }
     ;
+
 
 argument_list
     : /*vazio*/
-    |nonempty_args
+    | nonempty_args
     ;
 
 nonempty_args
@@ -207,7 +366,7 @@ param_list
     ;
 
 struct_member_list
-    :declaration
+    : declaration
     | struct_member_list declaration
     ;
 
@@ -225,21 +384,51 @@ while_statement
     : 'WHILE' '(' expression ')' statement
     ;
 
-for_statement
-    : 'FOR' '(' declaration expression_opt ';' assignment_opt ')' block
-    | 'FOR' '(' assignment_opt ';' expression_opt ';' operation_idf ')' block
+
+declaration_no_semi
+    : type multideclaration
+        {
+            for (var i = 0; i < $2.length; i++) {
+                if (typeof $2[i] === 'string') {
+                    addSymbol($2[i], $1);
+                } else if (Array.isArray($2[i])) {
+                    addSymbol($2[i][0], $1);
+                }
+            }
+            $$ = null;
+        }
     ;
 
-assignment_opt
+for_init
+    : declaration_no_semi
+    | assignment
+    | operation_idf
+    | expression
+    | /* vazio */
+    ;
+
+for_condition
+    : expression
+    | operation_idf
+    | /* vazio */
+    ;
+
+for_increment
     : assignment
     | operation_idf
-    | DIVMULT vazio MULTDIV
-    | 'IDF'
+    | /* vazio */
     ;
 
-expression_opt
-    : expression
-    | DIVMULT vazio MULTDIV
+// Novo escopo para cada for!
+for_statement
+    : 'FOR' '(' for_scope_enter for_init ';' for_condition ';' for_increment ')' block for_scope_exit
+    ;
+
+for_scope_enter
+    : /* vazio */ { setScope('for_' + Math.random().toString(36).substr(2,5)); }
+    ;
+for_scope_exit
+    : /* vazio */ { resetScope(); }
     ;
 
 switch_statement
@@ -249,16 +438,8 @@ switch_statement
 case_list
     : 'CASE' 'INT_LIT' ':' statement_list 'BREAK' ';' case_list
     | 'CASE' 'INT_LIT' ':' statement_list 'BREAK' ';'
-    | 'CASE' 'INT_LIT' ':' statement_list case_list
-    | 'CASE' 'INT_LIT' ':' statement_list
-    | 'CASE' expression ':' statement_list 'BREAK' ';' case_list
-    | 'CASE' expression ':' statement_list 'BREAK' ';'
-    | 'CASE' expression ':' statement_list case_list
-    | 'CASE' expression ':' statement_list
-    | case_list 'DEFAULT' ':' statement_list 'BREAK' ';'
     | 'DEFAULT' ':' statement_list 'BREAK' ';'
     | 'DEFAULT' ':' statement_list
-    |
     ;
 
 do_while_statement
@@ -266,43 +447,61 @@ do_while_statement
     ;
 
 block
-    : '{' statement_list '}'
+    : '{' block_enter statement_list '}' block_exit
+    ;
+
+block_enter
+    : /* vazio */ { setScope('block_' + Math.random().toString(36).substr(2, 5)); }
+    ;
+
+block_exit
+    : /* vazio */ { resetScope(); }
+    ;
+
+primary_expression
+    : INT_LIT                     { $$ = createNode('int_lit', null, null, $1); }
+    | F_LIT                       { $$ = createNode('float_lit', null, null, $1); }
+    | C_LIT                       { $$ = createNode('char_lit', null, null, $1); }
+    | STR_LIT                     { $$ = createNode('string_lit', null, null, $1); }
+    | IDF                         { $$ = createNode('id', null, null, $1); }
+    | IDF '[' expression ']'      { $$ = createNode('array_access', null, null, { id: $1, index: $3 }); }
+    | IDF '.' IDF                 { $$ = createNode('struct_access', null, null, { id: $1, field: $3 }); }
+    | IDF '(' argument_list ')'   { $$ = createNode('func_call', $1, null, $3); }
+    | '(' expression ')'          { $$ = $2; }
+    ;
+
+unary_expression
+    : primary_expression
+    | AMP unary_expression        { $$ = createNode('address_of', $2, null, null); }
+    | MULT unary_expression       { $$ = createNode('pointer_deref', $2, null, null); }
+    | 'NOT' unary_expression      { $$ = createNode('un_op', $2, null, '!'); }
+    | '(' type ')' unary_expression   %prec CAST { $$ = createNode('cast', $4, null, $2); }
+    | SIZEOF '(' type ')'   { $$ = createNode('sizeof_type', null, null, $3); }
+    | SIZEOF '(' expression ')' { $$ = createNode('sizeof_expr', null, null, $3);}
+    ;
+
+cast_expression
+    : unary_expression
+    | '(' type ')' cast_expression  %prec CAST { $$ = createNode('cast', $4, null, $2); }
     ;
 
 expression
-    : 'SIZEOF' '(' type ')'
-    | 'SIZEOF' expression
-    | 'AMP' expression
-    | '(' type 'MULT' ')' expression
-    | '(' type ')' expression 
-    | '(' type declarator ')' expression
-    | expression 'SUM' expression
-    | expression 'SUB' expression
-    | expression 'MULT' expression
-    | expression 'DIV' expression
-    | expression 'RDIV' expression
-    | expression 'EQ' expression
-    | expression 'NE' expression
-    | expression 'LE' expression
-    | expression 'GE' expression
-    | expression '<' expression
-    | expression '>' expression
-    | expression 'AND' expression
-    | expression 'OR' expression
-    | 'NOT' expression
-    | '(' expression ')'
-    | '{' values '}'
-    | 'INT_LIT'
-    | 'STR_LIT'
-    | 'SCANF' '(' argument_list ')'
-    | 'F_LIT'
-    | 'C_LIT'
-    | 'IDF'
-    | '(' 'type' ')' 'IDF'
-    | expression '.' 'IDF'
-    | 'IDF' '[' expression ']'
-    | 'MALLOC' '(' argument_list ')'
-    | 'FREE' '(' argument_list ')'
+    : cast_expression
+    | expression SUM expression       { $$ = createNode('bin_op', $1, $3, '+'); }
+    | expression SUB expression       { $$ = createNode('bin_op', $1, $3, '-'); }
+    | expression MULT expression      { $$ = createNode('bin_op', $1, $3, '*'); }
+    | expression DIV expression       { $$ = createNode('bin_op', $1, $3, '/'); }
+    | expression RDIV expression      { $$ = createNode('bin_op', $1, $3, '%'); }
+    | expression '<' expression       { $$ = createNode('bin_op', $1, $3, '<'); }
+    | expression '>' expression       { $$ = createNode('bin_op', $1, $3, '>'); }
+    | expression 'EQ' expression      { $$ = createNode('bin_op', $1, $3, '=='); }
+    | expression 'NE' expression      { $$ = createNode('bin_op', $1, $3, '!='); }
+    | expression 'LE' expression      { $$ = createNode('bin_op', $1, $3, '<='); }
+    | expression 'GE' expression      { $$ = createNode('bin_op', $1, $3, '>='); }
+    | expression 'AND' expression     { $$ = createNode('bin_op', $1, $3, '&&'); }
+    | expression 'OR' expression      { $$ = createNode('bin_op', $1, $3, '||'); }
+    | expression AMP expression       { $$ = createNode('bin_op', $1, $3, '&'); }
+    | expression '|' expression       { $$ = createNode('bin_op', $1, $3, '|'); }
     ;
 
 values
@@ -310,5 +509,5 @@ values
     | expression
     ; 
 
-
 %%
+

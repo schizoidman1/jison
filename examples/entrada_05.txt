@@ -1,0 +1,11 @@
+int a = 10;
+if (a > 0) {
+   int b = 20; // b só existe aqui
+   a = b;
+} else {
+   int c = 30; // c só existe aqui
+   a = c;
+}
+a = 99; // ok
+b = 11; // erro
+c = 12; // erro

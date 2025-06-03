@@ -1,0 +1,54 @@
+int a = 1;         // global
+int b = 2;         // global
+
+void foo() {
+    int x = 10;        // local da função foo
+    a = 5;             // ok: acessa global
+    int b = 100;       // oculta global b dentro de foo
+
+    {
+        int x = 99;    // novo x, só neste bloco
+        int y = 7;     // só neste bloco
+        a = x + y;     // usa x e y locais
+    }
+    // y não existe mais aqui
+    x = x + 1;         // ok, x local de foo
+
+    for (int i = 0; i < 3; i++) {
+        int z = i * 2;    // z só dentro do for
+        b = b + z;        // b local de foo
+    }
+    // z não existe mais aqui
+
+    if (x > 0) {
+        int w = 55;       // só no if
+        x = w;            // ok
+    } else {
+        int w = 44;       // outro w, só no else
+        x = w;            // ok
+    }
+    // w não existe mais aqui
+
+    b = x;                // b e x locais de foo
+}
+
+// Fora da função
+a = 77;       // ok, global
+b = 88;       // ok, global
+x = 22;       // ERRO: x não existe aqui!
+w = 11;       // ERRO: w não existe aqui!
+y = 3;        // ERRO: y não existe aqui!
+z = 10;       // ERRO: z não existe aqui!
+
+void bar() {
+    int b = 3;           // b local de bar (oculta o global dentro desta função)
+    b = b + 1;           // ok
+    a = b;               // usa global a e local b
+
+    {
+        int a = 999;     // novo a só aqui dentro
+        b = a + 1;       // a local de bloco, b local de bar
+    }
+    // a local do bloco não existe mais
+    a = b;               // global a, local b
+}
